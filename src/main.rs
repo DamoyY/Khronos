@@ -251,7 +251,7 @@ mod ntp {
         Success(chrono::Duration, chrono::Duration),
     }
 
-    pub fn query_ntp(server: &str, timeout: Duration, program_clock: &ProgramClock) -> io::Result<(chrono::Duration, chrono::Duration)> {
+    pub fn query_ntp(server: &str, timeout: Duration, program_clock: &Arc<Mutex<ProgramClock>>) -> io::Result<(chrono::Duration, chrono::Duration)> {
         let addr = (server, NTP_PORT)
             .to_socket_addrs()?
             .next()
@@ -263,7 +263,9 @@ mod ntp {
         socket.set_write_timeout(Some(timeout))?;
         let mut req = [0u8; NTP_PACKET_SIZE];
         req[0] = 0b00_100_011;
-        let t1 = program_clock.now();
+        let t1 = {
+            program_clock.lock().unwrap().now()
+        };
         let t1_ntp = NtpTimestamp::from_chrono_utc(t1)
             .map_err(|e| io::Error::new(ErrorKind::Other, format!("Cannot convert program time: {}", e)))?;
         req[TX_TS_OFFSET..TX_TS_OFFSET + 8].copy_from_slice(&t1_ntp.to_bytes());
@@ -286,18 +288,14 @@ mod ntp {
         let t3: DateTime<Utc> = t3_systime.into();
         let offset = ((t2 - t1) + (t3 - t4)) / 2;
         let delay = (t4 - t1) - (t3 - t2);
-        
         Ok((offset, delay))
     }
-
     fn perform_sync(
         server: &str,
         program_clock: &Arc<Mutex<ProgramClock>>
     ) -> io::Result<(chrono::Duration, chrono::Duration)> {
-        let clock_guard = program_clock.lock().unwrap();
-        query_ntp(server, Duration::from_millis(500), &clock_guard)
+        query_ntp(server, Duration::from_millis(500), program_clock)
     }
-
     pub fn start_sync_thread(clock: Arc<Mutex<ProgramClock>>) -> mpsc::Receiver<SyncMessage> {
         let (tx, rx) = mpsc::channel::<SyncMessage>();
         thread::spawn(move || {
@@ -320,7 +318,6 @@ mod ntp {
         rx
     }
 }
-
 fn initial_sync(clock: &Arc<Mutex<program_clock::ProgramClock>>) -> io::Result<()> {
     let mut rng = rand::rng();
     loop {
@@ -333,20 +330,15 @@ fn initial_sync(clock: &Arc<Mutex<program_clock::ProgramClock>>) -> io::Result<(
             Print(format!("正在尝试从 {} 进行初始同步...", server))
         )?;
         io::stdout().flush()?;
-        
-        let clock_guard = clock.lock().unwrap();
-        if let Ok((initial_offset, _)) = ntp::query_ntp(server, Duration::from_millis(200), &clock_guard) {
-            drop(clock_guard);
+        if let Ok((initial_offset, _)) = ntp::query_ntp(server, Duration::from_millis(200), clock) {
             clock.lock().unwrap().apply_offset(initial_offset);
             println!();
             break;
         }
-        
         thread::sleep(Duration::from_secs(1));
     }
     Ok(())
 }
-
 fn handle_sync_message(
     message: ntp::SyncMessage,
     kalman_filter: &mut kalman_filter::KalmanFilter,
@@ -373,19 +365,17 @@ fn handle_sync_message(
             } else {
                 chrono::Duration::from_std(Duration::from_secs_f64(smoothed_offset_secs))
             }.unwrap_or(chrono::Duration::zero());
-            
             clock.lock().unwrap().apply_offset(smoothed_offset);
-            
             execute!(
                 io::stdout(),
                 cursor::MoveToColumn(0),
                 terminal::Clear(terminal::ClearType::CurrentLine)
             )?;
             print!(
-                "同步完成。测量偏移: {}ms, 延迟: {}ms | 滤波后偏移: {}ms, 漂移率: {:.3} ppm, q: {:.2e}",
-                measured_offset.num_milliseconds(),
+                "结果：测量偏移: {:.2}ms, 延迟: {}ms | 滤波后偏移: {:.2}ms, 漂移率: {:.2} ppm, 过程噪声: {:.1e}",
+                measured_offset_secs * 1000.0,
                 measured_delay.num_milliseconds(),
-                smoothed_offset.num_milliseconds(),
+                smoothed_offset_secs * 1000.0,
                 kalman_filter.get_drift_ppm(),
                 kalman_filter.get_process_noise_q()
             );
@@ -393,7 +383,6 @@ fn handle_sync_message(
     }
     io::stdout().flush()
 }
-
 fn run_ui_loop(
     clock: Arc<Mutex<program_clock::ProgramClock>>,
     mut kalman_filter: kalman_filter::KalmanFilter,
@@ -417,30 +406,23 @@ fn run_ui_loop(
         if let Ok(message) = rx.try_recv() {
             handle_sync_message(message, &mut kalman_filter, &clock, delay_to_r_factor)?;
         }
-
         thread::sleep(Duration::from_millis(2));
     }
 }
-
 fn main() -> io::Result<()> {
     const ADAPTIVE_Q_ENABLED: bool = true;
     const INITIAL_PROCESS_NOISE_Q: f64 = 5e-10;
     const DELAY_TO_R_FACTOR: f64 = 1.0;
     const INITIAL_UNCERTAINTY: f64 = 10.0;
-
-    println!("时钟启动中... 按下 Ctrl+C 退出。");
+    println!("按下 Ctrl+C 退出。");
     let clock = Arc::new(Mutex::new(program_clock::ProgramClock::new()));
-
     initial_sync(&clock)?;
-
     let kalman_filter = kalman_filter::KalmanFilter::new(
         0.0,
         INITIAL_UNCERTAINTY,
         INITIAL_PROCESS_NOISE_Q,
         ADAPTIVE_Q_ENABLED,
     );
-
     let rx = ntp::start_sync_thread(Arc::clone(&clock));
-
     run_ui_loop(clock, kalman_filter, rx, DELAY_TO_R_FACTOR)
 }
