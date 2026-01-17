@@ -24,6 +24,20 @@ pub const NTP_SERVERS: &[&str] = &[
     "ntp1.nim.ac.cn",
     "ntp2.nim.ac.cn",
     "time.cloudflare.com",
+    "time.google.com",
+    "time1.google.com",
+    "time2.google.com",
+    "time3.google.com",
+    "time4.google.com",
+    "time.apple.com",
+    "time.asia.apple.com",
+    "time.windows.com",
+    "ntp.tuna.tsinghua.edu.cn",
+    "ntp.sjtu.edu.cn",
+    "ntp.myhuaweicloud.com",
+    "time.nist.gov",
+    "time-a.nist.gov",
+    "pool.ntp.org",
 ];
 const NTP_PORT: u16 = 123;
 const NTP_PACKET_SIZE: usize = 48;

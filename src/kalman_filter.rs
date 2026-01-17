@@ -5,7 +5,6 @@ pub struct KalmanFilter {
     process_noise_q: f64,
     last_timestamp: Instant,
     nis_ema: f64,
-    adaptive_q_enabled: bool,
 }
 impl KalmanFilter {
     const ADAPTATION_RATE_ETA: f64 = 0.05;
@@ -15,7 +14,6 @@ impl KalmanFilter {
         initial_offset: f64,
         initial_uncertainty: f64,
         initial_process_noise_q: f64,
-        adaptive_q_enabled: bool,
     ) -> Self {
         Self {
             x_hat: [initial_offset, 0.0],
@@ -23,7 +21,6 @@ impl KalmanFilter {
             process_noise_q: initial_process_noise_q,
             last_timestamp: Instant::now(),
             nis_ema: 1.0,
-            adaptive_q_enabled,
         }
     }
 
@@ -102,13 +99,10 @@ impl KalmanFilter {
                 ikh[1][0].mul_add(p_predicted[0][1], ikh[1][1] * p_predicted[1][1]),
             ],
         ];
-        if self.adaptive_q_enabled {
-            let nis = y * y / s;
-            self.nis_ema =
-                (1.0 - Self::NIS_EMA_ALPHA).mul_add(self.nis_ema, Self::NIS_EMA_ALPHA * nis);
-            let factor = (Self::ADAPTATION_RATE_ETA * (self.nis_ema - 1.0)).exp();
-            self.process_noise_q *= factor;
-        }
+        let nis = y * y / s;
+        self.nis_ema = (1.0 - Self::NIS_EMA_ALPHA).mul_add(self.nis_ema, Self::NIS_EMA_ALPHA * nis);
+        let factor = (Self::ADAPTATION_RATE_ETA * (self.nis_ema - 1.0)).exp();
+        self.process_noise_q *= factor;
     }
 
     pub fn update(&mut self, measurement: f64, measurement_noise_r: f64) -> f64 {

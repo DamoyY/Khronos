@@ -31,7 +31,6 @@ pub fn run(config: AppConfig) -> io::Result<()> {
         0.0,
         config.initial_uncertainty,
         config.initial_process_noise_q,
-        config.adaptive_q_enabled,
     );
     let rx = ntp::start_sync_thread(Arc::clone(&clock));
     let result = run_ui_loop(
