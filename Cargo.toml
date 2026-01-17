@@ -1,9 +1,20 @@
 [package]
 name = "time"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-chrono = "0.4"
-rand = "0.9"
-crossterm = "0.29"
+chrono = "*"
+rand = "*"
+crossterm = "*"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
