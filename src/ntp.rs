@@ -3,7 +3,7 @@ use std::{
     net::{ToSocketAddrs, UdpSocket},
     sync::{Arc, Mutex, mpsc},
     thread,
-    time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{DateTime, Utc};
@@ -27,6 +27,7 @@ pub const NTP_SERVERS: &[&str] = &[
 const NTP_PORT: u16 = 123;
 const NTP_PACKET_SIZE: usize = 48;
 const NTP_UNIX_EPOCH_DIFF: u64 = 2_208_988_800;
+const NTP_UNIX_EPOCH_DIFF_U32: u32 = 2_208_988_800;
 const RECV_TS_OFFSET: usize = 32;
 const TX_TS_OFFSET: usize = 40;
 #[derive(Copy, Clone, Debug)]
@@ -35,37 +36,46 @@ struct NtpTimestamp {
     fraction: u32,
 }
 impl NtpTimestamp {
-    fn from_chrono_utc(time: DateTime<Utc>) -> Result<Self, SystemTimeError> {
+    fn from_chrono_utc(time: DateTime<Utc>) -> io::Result<Self> {
         let systime: SystemTime = time.into();
-        let dur = systime.duration_since(UNIX_EPOCH)?;
-        let seconds = dur.as_secs() + NTP_UNIX_EPOCH_DIFF;
+        let dur = systime
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?;
+        let seconds = dur
+            .as_secs()
+            .checked_add(NTP_UNIX_EPOCH_DIFF)
+            .ok_or_else(|| io::Error::other("NTP seconds overflow"))?;
+        let seconds =
+            u32::try_from(seconds).map_err(|_| io::Error::other("NTP seconds overflow"))?;
         let nanos = dur.subsec_nanos();
-        let fraction = ((nanos as u128 * 0x1_0000_0000) / 1_000_000_000) as u32;
-        Ok(NtpTimestamp {
-            seconds: seconds as u32,
-            fraction,
-        })
+        let fraction =
+            u32::try_from((u128::from(nanos) * u128::from(0x1_0000_0000u64)) / 1_000_000_000u128)
+                .map_err(|_| io::Error::other("NTP fraction overflow"))?;
+        Ok(Self { seconds, fraction })
     }
 
-    fn to_system_time(&self) -> io::Result<SystemTime> {
-        if self.seconds < NTP_UNIX_EPOCH_DIFF as u32 {
+    fn to_system_time(self) -> io::Result<SystemTime> {
+        if self.seconds < NTP_UNIX_EPOCH_DIFF_U32 {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
                 "NTP time is earlier than Unix epoch",
             ));
         }
-        let unix_secs = self.seconds as u64 - NTP_UNIX_EPOCH_DIFF;
-        let nanos = ((self.fraction as u128 * 1_000_000_000) / 0x1_0000_0000) as u32;
+        let unix_secs = u64::from(self.seconds) - NTP_UNIX_EPOCH_DIFF;
+        let nanos = u32::try_from(
+            (u128::from(self.fraction) * 1_000_000_000u128) / u128::from(0x1_0000_0000u64),
+        )
+        .map_err(|_| io::Error::other("NTP fraction overflow"))?;
         Ok(UNIX_EPOCH + Duration::new(unix_secs, nanos))
     }
 
-    fn from_bytes(bytes: &[u8; 8]) -> Self {
+    const fn from_bytes(bytes: [u8; 8]) -> Self {
         let seconds = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         let fraction = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-        NtpTimestamp { seconds, fraction }
+        Self { seconds, fraction }
     }
 
-    fn to_bytes(&self) -> [u8; 8] {
+    fn to_bytes(self) -> [u8; 8] {
         let mut bytes = [0u8; 8];
         bytes[0..4].copy_from_slice(&self.seconds.to_be_bytes());
         bytes[4..8].copy_from_slice(&self.fraction.to_be_bytes());
@@ -84,12 +94,7 @@ pub fn query_ntp(
     let addr = (server, NTP_PORT)
         .to_socket_addrs()?
         .next()
-        .ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::Other,
-                format!("Cannot resolve NTP server: {}", server),
-            )
-        })?;
+        .ok_or_else(|| io::Error::other(format!("Cannot resolve NTP server: {server}")))?;
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.connect(addr)?;
     socket.set_read_timeout(Some(timeout))?;
@@ -97,12 +102,8 @@ pub fn query_ntp(
     let mut req = [0u8; NTP_PACKET_SIZE];
     req[0] = 0b00_100_011;
     let t1 = { program_clock.lock().unwrap().now() };
-    let t1_ntp = NtpTimestamp::from_chrono_utc(t1).map_err(|e| {
-        io::Error::new(
-            ErrorKind::Other,
-            format!("Cannot convert program time: {}", e),
-        )
-    })?;
+    let t1_ntp = NtpTimestamp::from_chrono_utc(t1)
+        .map_err(|e| io::Error::other(format!("Cannot convert program time: {e}")))?;
     req[TX_TS_OFFSET..TX_TS_OFFSET + 8].copy_from_slice(&t1_ntp.to_bytes());
     let send_instant = Instant::now();
     socket.send(&req)?;
@@ -117,12 +118,8 @@ pub fn query_ntp(
     }
     let round_trip_duration = recv_instant.duration_since(send_instant);
     let t4 = t1
-        + chrono::Duration::from_std(round_trip_duration).map_err(|e| {
-            io::Error::new(
-                ErrorKind::Other,
-                format!("Round trip duration error: {}", e),
-            )
-        })?;
+        + chrono::Duration::from_std(round_trip_duration)
+            .map_err(|e| io::Error::other(format!("Round trip duration error: {e}")))?;
     let t2_ntp =
         NtpTimestamp::from_bytes(buf[RECV_TS_OFFSET..RECV_TS_OFFSET + 8].try_into().unwrap());
     let t3_ntp = NtpTimestamp::from_bytes(buf[TX_TS_OFFSET..TX_TS_OFFSET + 8].try_into().unwrap());
@@ -152,10 +149,10 @@ pub fn start_sync_thread(clock: Arc<Mutex<ProgramClock>>) -> mpsc::Receiver<Sync
             if tx.send(SyncMessage::Syncing(server.clone())).is_err() {
                 break;
             }
-            if let Ok(result) = perform_sync(&server, &clock) {
-                if tx.send(SyncMessage::Success(result.0, result.1)).is_err() {
-                    break;
-                }
+            if let Ok(result) = perform_sync(&server, &clock)
+                && tx.send(SyncMessage::Success(result.0, result.1)).is_err()
+            {
+                break;
             }
         }
     });

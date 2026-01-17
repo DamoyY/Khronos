@@ -7,7 +7,7 @@ pub struct ProgramClock {
 }
 impl ProgramClock {
     pub fn new() -> Self {
-        ProgramClock {
+        Self {
             current_utc: "2000-01-01T00:00:00Z".parse().unwrap(),
             last_updated_at: Instant::now(),
         }

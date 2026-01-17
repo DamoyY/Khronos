@@ -17,7 +17,7 @@ impl KalmanFilter {
         initial_process_noise_q: f64,
         adaptive_q_enabled: bool,
     ) -> Self {
-        KalmanFilter {
+        Self {
             x_hat: [initial_offset, 0.0],
             p_matrix: [[initial_uncertainty, 0.0], [0.0, initial_uncertainty]],
             process_noise_q: initial_process_noise_q,
@@ -34,27 +34,27 @@ impl KalmanFilter {
         let dt3 = dt2 * dt;
         let q_matrix = [[dt3 / 3.0 * q, dt2 / 2.0 * q], [dt2 / 2.0 * q, dt * q]];
         let x_hat_predicted = [
-            self.x_hat[0] * f_matrix[0][0] + self.x_hat[1] * f_matrix[0][1],
-            self.x_hat[0] * f_matrix[1][0] + self.x_hat[1] * f_matrix[1][1],
+            self.x_hat[0].mul_add(f_matrix[0][0], self.x_hat[1] * f_matrix[0][1]),
+            self.x_hat[0].mul_add(f_matrix[1][0], self.x_hat[1] * f_matrix[1][1]),
         ];
         let fp = [
             [
-                f_matrix[0][0] * self.p_matrix[0][0] + f_matrix[0][1] * self.p_matrix[1][0],
-                f_matrix[0][0] * self.p_matrix[0][1] + f_matrix[0][1] * self.p_matrix[1][1],
+                f_matrix[0][0].mul_add(self.p_matrix[0][0], f_matrix[0][1] * self.p_matrix[1][0]),
+                f_matrix[0][0].mul_add(self.p_matrix[0][1], f_matrix[0][1] * self.p_matrix[1][1]),
             ],
             [
-                f_matrix[1][0] * self.p_matrix[0][0] + f_matrix[1][1] * self.p_matrix[1][0],
-                f_matrix[1][0] * self.p_matrix[0][1] + f_matrix[1][1] * self.p_matrix[1][1],
+                f_matrix[1][0].mul_add(self.p_matrix[0][0], f_matrix[1][1] * self.p_matrix[1][0]),
+                f_matrix[1][0].mul_add(self.p_matrix[0][1], f_matrix[1][1] * self.p_matrix[1][1]),
             ],
         ];
         let fpf_t = [
             [
-                fp[0][0] * f_matrix[0][0] + fp[0][1] * f_matrix[0][1],
-                fp[0][0] * f_matrix[1][0] + fp[0][1] * f_matrix[1][1],
+                fp[0][0].mul_add(f_matrix[0][0], fp[0][1] * f_matrix[0][1]),
+                fp[0][0].mul_add(f_matrix[1][0], fp[0][1] * f_matrix[1][1]),
             ],
             [
-                fp[1][0] * f_matrix[0][0] + fp[1][1] * f_matrix[0][1],
-                fp[1][0] * f_matrix[1][0] + fp[1][1] * f_matrix[1][1],
+                fp[1][0].mul_add(f_matrix[0][0], fp[1][1] * f_matrix[0][1]),
+                fp[1][0].mul_add(f_matrix[1][0], fp[1][1] * f_matrix[1][1]),
             ],
         ];
         let p_predicted = [
@@ -71,21 +71,22 @@ impl KalmanFilter {
         x_hat_predicted: [f64; 2],
         p_predicted: [[f64; 2]; 2],
     ) {
-        let h_matrix = [1.0, 0.0];
-        let y = measurement - (h_matrix[0] * x_hat_predicted[0] + h_matrix[1] * x_hat_predicted[1]);
+        let h_matrix: [f64; 2] = [1.0, 0.0];
+        let y =
+            measurement - h_matrix[0].mul_add(x_hat_predicted[0], h_matrix[1] * x_hat_predicted[1]);
         let hp = [
-            h_matrix[0] * p_predicted[0][0] + h_matrix[1] * p_predicted[1][0],
-            h_matrix[0] * p_predicted[0][1] + h_matrix[1] * p_predicted[1][1],
+            h_matrix[0].mul_add(p_predicted[0][0], h_matrix[1] * p_predicted[1][0]),
+            h_matrix[0].mul_add(p_predicted[0][1], h_matrix[1] * p_predicted[1][1]),
         ];
-        let hph_t = hp[0] * h_matrix[0] + hp[1] * h_matrix[1];
+        let hph_t = hp[0].mul_add(h_matrix[0], hp[1] * h_matrix[1]);
         let s = hph_t + measurement_noise_r;
         let ph_t = [
-            p_predicted[0][0] * h_matrix[0] + p_predicted[0][1] * h_matrix[1],
-            p_predicted[1][0] * h_matrix[0] + p_predicted[1][1] * h_matrix[1],
+            p_predicted[0][0].mul_add(h_matrix[0], p_predicted[0][1] * h_matrix[1]),
+            p_predicted[1][0].mul_add(h_matrix[0], p_predicted[1][1] * h_matrix[1]),
         ];
         let k_gain = [ph_t[0] / s, ph_t[1] / s];
-        self.x_hat[0] = x_hat_predicted[0] + k_gain[0] * y;
-        self.x_hat[1] = x_hat_predicted[1] + k_gain[1] * y;
+        self.x_hat[0] = k_gain[0].mul_add(y, x_hat_predicted[0]);
+        self.x_hat[1] = k_gain[1].mul_add(y, x_hat_predicted[1]);
         let kh = [
             [k_gain[0] * h_matrix[0], k_gain[0] * h_matrix[1]],
             [k_gain[1] * h_matrix[0], k_gain[1] * h_matrix[1]],
@@ -93,17 +94,18 @@ impl KalmanFilter {
         let ikh = [[1.0 - kh[0][0], -kh[0][1]], [-kh[1][0], 1.0 - kh[1][1]]];
         self.p_matrix = [
             [
-                ikh[0][0] * p_predicted[0][0] + ikh[0][1] * p_predicted[1][0],
-                ikh[0][0] * p_predicted[0][1] + ikh[0][1] * p_predicted[1][1],
+                ikh[0][0].mul_add(p_predicted[0][0], ikh[0][1] * p_predicted[1][0]),
+                ikh[0][0].mul_add(p_predicted[0][1], ikh[0][1] * p_predicted[1][1]),
             ],
             [
-                ikh[1][0] * p_predicted[0][0] + ikh[1][1] * p_predicted[1][0],
-                ikh[1][0] * p_predicted[0][1] + ikh[1][1] * p_predicted[1][1],
+                ikh[1][0].mul_add(p_predicted[0][0], ikh[1][1] * p_predicted[1][0]),
+                ikh[1][0].mul_add(p_predicted[0][1], ikh[1][1] * p_predicted[1][1]),
             ],
         ];
         if self.adaptive_q_enabled {
             let nis = y * y / s;
-            self.nis_ema = (1.0 - Self::NIS_EMA_ALPHA) * self.nis_ema + Self::NIS_EMA_ALPHA * nis;
+            self.nis_ema =
+                (1.0 - Self::NIS_EMA_ALPHA).mul_add(self.nis_ema, Self::NIS_EMA_ALPHA * nis);
             let factor = (Self::ADAPTATION_RATE_ETA * (self.nis_ema - 1.0)).exp();
             self.process_noise_q *= factor;
         }
@@ -126,7 +128,7 @@ impl KalmanFilter {
         self.x_hat[1] * 1_000_000.0
     }
 
-    pub fn get_process_noise_q(&self) -> f64 {
+    pub const fn get_process_noise_q(&self) -> f64 {
         self.process_noise_q
     }
 }

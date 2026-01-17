@@ -14,14 +14,14 @@ pub fn run(config: AppConfig) -> io::Result<()> {
     println!("按下 Ctrl+C 退出。");
     let clock = Arc::new(Mutex::new(ProgramClock::new()));
     initial_sync(&clock)?;
-    let kalman_filter = KalmanFilter::new(
+    let mut kalman_filter = KalmanFilter::new(
         0.0,
         config.initial_uncertainty,
         config.initial_process_noise_q,
         config.adaptive_q_enabled,
     );
     let rx = ntp::start_sync_thread(Arc::clone(&clock));
-    run_ui_loop(clock, kalman_filter, rx, config.delay_to_r_factor)
+    run_ui_loop(&clock, &mut kalman_filter, &rx, config.delay_to_r_factor)
 }
 fn initial_sync(clock: &Arc<Mutex<ProgramClock>>) -> io::Result<()> {
     let mut rng = rand::rng();
@@ -32,7 +32,7 @@ fn initial_sync(clock: &Arc<Mutex<ProgramClock>>) -> io::Result<()> {
             io::stdout(),
             cursor::MoveToColumn(0),
             terminal::Clear(terminal::ClearType::CurrentLine),
-            Print(format!("正在尝试从 {} 进行初始同步...", server))
+            Print(format!("正在尝试从 {server} 进行初始同步..."))
         )?;
         io::stdout().flush()?;
         if let Ok((initial_offset, _)) = ntp::query_ntp(server, Duration::from_millis(200), clock) {
@@ -56,15 +56,55 @@ fn handle_sync_message(
                 io::stdout(),
                 cursor::MoveToColumn(0),
                 terminal::Clear(terminal::ClearType::CurrentLine),
-                Print(format!("重新同步中 (来自: {})...", server))
+                Print(format!("重新同步中 (来自: {server})..."))
             )?;
         }
         ntp::SyncMessage::Success(measured_offset, measured_delay) => {
-            let measured_offset_secs =
-                measured_offset.num_microseconds().unwrap_or(0) as f64 / 1_000_000.0;
-            let measurement_noise_r = (measured_delay.num_microseconds().unwrap_or(0) as f64
-                / 1_000_000.0)
-                * delay_to_r_factor;
+            fn micros_to_secs(micros: i64, what: &'static str) -> io::Result<f64> {
+                const MAX_SAFE_INTEGER_IN_F64: u64 = 9_007_199_254_740_992; // 2^53
+                const TWO_POW_32: f64 = 4_294_967_296.0;
+                let micros_abs = micros.unsigned_abs();
+                if micros_abs > MAX_SAFE_INTEGER_IN_F64 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("{what} 超出 f64 可精确表示的整数范围"),
+                    ));
+                }
+                let high = u32::try_from(micros_abs >> 32).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("{what} 超出 u32 可表示范围"),
+                    )
+                })?;
+                let low = u32::try_from(micros_abs & 0xFFFF_FFFF).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("{what} 超出 u32 可表示范围"),
+                    )
+                })?;
+                let micros_f64 = f64::from(high) * TWO_POW_32 + f64::from(low);
+                let micros_secs = micros_f64 / 1_000_000.0;
+                Ok(if micros < 0 {
+                    -micros_secs
+                } else {
+                    micros_secs
+                })
+            }
+            let measured_offset_micros = measured_offset.num_microseconds().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "NTP measured_offset 超出 microseconds 可表示范围",
+                )
+            })?;
+            let measured_offset_secs = micros_to_secs(measured_offset_micros, "measured_offset")?;
+            let measured_delay_micros = measured_delay.num_microseconds().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "NTP measured_delay 超出 microseconds 可表示范围",
+                )
+            })?;
+            let measurement_noise_r =
+                micros_to_secs(measured_delay_micros, "measured_delay")? * delay_to_r_factor;
             let smoothed_offset_secs =
                 kalman_filter.update(measured_offset_secs, measurement_noise_r);
             let smoothed_offset = if smoothed_offset_secs < 0.0 {
@@ -73,7 +113,12 @@ fn handle_sync_message(
             } else {
                 chrono::Duration::from_std(Duration::from_secs_f64(smoothed_offset_secs))
             }
-            .unwrap_or(chrono::Duration::zero());
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("滤波偏移无法转换为 chrono::Duration: {e}"),
+                )
+            })?;
             clock.lock().unwrap().apply_offset(smoothed_offset);
             execute!(
                 io::stdout(),
@@ -94,9 +139,9 @@ fn handle_sync_message(
     io::stdout().flush()
 }
 fn run_ui_loop(
-    clock: Arc<Mutex<ProgramClock>>,
-    mut kalman_filter: KalmanFilter,
-    rx: mpsc::Receiver<ntp::SyncMessage>,
+    clock: &Arc<Mutex<ProgramClock>>,
+    kalman_filter: &mut KalmanFilter,
+    rx: &mpsc::Receiver<ntp::SyncMessage>,
     delay_to_r_factor: f64,
 ) -> io::Result<()> {
     loop {
@@ -113,7 +158,7 @@ fn run_ui_loop(
         )?;
         io::stdout().flush()?;
         if let Ok(message) = rx.try_recv() {
-            handle_sync_message(message, &mut kalman_filter, &clock, delay_to_r_factor)?;
+            handle_sync_message(message, kalman_filter, clock, delay_to_r_factor)?;
         }
         thread::sleep(Duration::from_millis(2));
     }
