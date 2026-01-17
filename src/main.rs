@@ -1,14 +1,15 @@
-use std::io::{self, Write};
-use std::time::Duration;
-use std::thread;
-use chrono::{DateTime, Local};
-use rand::Rng;
-use crossterm::{cursor, execute, style::Print, terminal};
-use std::sync::{mpsc, Arc, Mutex};
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex, mpsc},
+    thread,
+    time::Duration,
+};
 
+use chrono::{DateTime, Local};
+use crossterm::{cursor, execute, style::Print, terminal};
+use rand::Rng;
 mod kalman_filter {
     use std::time::Instant;
-
     pub struct KalmanFilter {
         x_hat: [f64; 2],
         p_matrix: [[f64; 2]; 2],
@@ -17,10 +18,9 @@ mod kalman_filter {
         nis_ema: f64,
         adaptive_q_enabled: bool,
     }
-
     impl KalmanFilter {
-        const NIS_EMA_ALPHA: f64 = 0.05;
         const ADAPTATION_RATE_ETA: f64 = 0.05;
+        const NIS_EMA_ALPHA: f64 = 0.05;
 
         pub fn new(
             initial_offset: f64,
@@ -43,16 +43,11 @@ mod kalman_filter {
             let q = self.process_noise_q;
             let dt2 = dt * dt;
             let dt3 = dt2 * dt;
-            let q_matrix = [
-                [dt3 / 3.0 * q, dt2 / 2.0 * q],
-                [dt2 / 2.0 * q, dt * q],
-            ];
-
+            let q_matrix = [[dt3 / 3.0 * q, dt2 / 2.0 * q], [dt2 / 2.0 * q, dt * q]];
             let x_hat_predicted = [
                 self.x_hat[0] * f_matrix[0][0] + self.x_hat[1] * f_matrix[0][1],
                 self.x_hat[0] * f_matrix[1][0] + self.x_hat[1] * f_matrix[1][1],
             ];
-
             let fp = [
                 [
                     f_matrix[0][0] * self.p_matrix[0][0] + f_matrix[0][1] * self.p_matrix[1][0],
@@ -89,24 +84,21 @@ mod kalman_filter {
             p_predicted: [[f64; 2]; 2],
         ) {
             let h_matrix = [1.0, 0.0];
-            let y = measurement - (h_matrix[0] * x_hat_predicted[0] + h_matrix[1] * x_hat_predicted[1]);
-
+            let y =
+                measurement - (h_matrix[0] * x_hat_predicted[0] + h_matrix[1] * x_hat_predicted[1]);
             let hp = [
                 h_matrix[0] * p_predicted[0][0] + h_matrix[1] * p_predicted[1][0],
                 h_matrix[0] * p_predicted[0][1] + h_matrix[1] * p_predicted[1][1],
             ];
             let hph_t = hp[0] * h_matrix[0] + hp[1] * h_matrix[1];
             let s = hph_t + measurement_noise_r;
-
             let ph_t = [
                 p_predicted[0][0] * h_matrix[0] + p_predicted[0][1] * h_matrix[1],
                 p_predicted[1][0] * h_matrix[0] + p_predicted[1][1] * h_matrix[1],
             ];
             let k_gain = [ph_t[0] / s, ph_t[1] / s];
-
             self.x_hat[0] = x_hat_predicted[0] + k_gain[0] * y;
             self.x_hat[1] = x_hat_predicted[1] + k_gain[1] * y;
-
             let kh = [
                 [k_gain[0] * h_matrix[0], k_gain[0] * h_matrix[1]],
                 [k_gain[1] * h_matrix[0], k_gain[1] * h_matrix[1]],
@@ -122,10 +114,10 @@ mod kalman_filter {
                     ikh[1][0] * p_predicted[0][1] + ikh[1][1] * p_predicted[1][1],
                 ],
             ];
-
             if self.adaptive_q_enabled {
                 let nis = y * y / s;
-                self.nis_ema = (1.0 - Self::NIS_EMA_ALPHA) * self.nis_ema + Self::NIS_EMA_ALPHA * nis;
+                self.nis_ema =
+                    (1.0 - Self::NIS_EMA_ALPHA) * self.nis_ema + Self::NIS_EMA_ALPHA * nis;
                 let factor = (Self::ADAPTATION_RATE_ETA * (self.nis_ema - 1.0)).exp();
                 self.process_noise_q *= factor;
             }
@@ -135,7 +127,12 @@ mod kalman_filter {
             let dt = self.last_timestamp.elapsed().as_secs_f64();
             self.last_timestamp = Instant::now();
             let (x_hat_predicted, p_predicted) = self.predict(dt);
-            self.correct(measurement, measurement_noise_r, x_hat_predicted, p_predicted);
+            self.correct(
+                measurement,
+                measurement_noise_r,
+                x_hat_predicted,
+                p_predicted,
+            );
             self.x_hat[0]
         }
 
@@ -148,16 +145,14 @@ mod kalman_filter {
         }
     }
 }
-
 mod program_clock {
-    use chrono::{DateTime, Utc};
     use std::time::Instant;
 
+    use chrono::{DateTime, Utc};
     pub struct ProgramClock {
         current_utc: DateTime<Utc>,
         last_updated_at: Instant,
     }
-
     impl ProgramClock {
         pub fn new() -> Self {
             ProgramClock {
@@ -178,35 +173,43 @@ mod program_clock {
         }
     }
 }
-
 mod ntp {
-    use super::program_clock::ProgramClock;
-    use std::io::{self, ErrorKind};
-    use std::net::{ToSocketAddrs, UdpSocket};
-    use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH, Instant};
+    use std::{
+        io::{self, ErrorKind},
+        net::{ToSocketAddrs, UdpSocket},
+        sync::{Arc, Mutex, mpsc},
+        thread,
+        time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH},
+    };
+
     use chrono::{DateTime, Utc};
-    use std::sync::{mpsc, Arc, Mutex};
-    use std::thread;
     use rand::Rng;
 
+    use super::program_clock::ProgramClock;
     pub const NTP_SERVERS: &[&str] = &[
-        "0.cn.pool.ntp.org", "1.cn.pool.ntp.org", "0.asia.pool.ntp.org", "1.asia.pool.ntp.org", "ntp.aliyun.com", "ntp1.aliyun.com",
-        "ntp.tencent.com", "ntp1.tencent.com", "ntp.ntsc.ac.cn", "ntp1.nim.ac.cn", "ntp2.nim.ac.cn",
+        "0.cn.pool.ntp.org",
+        "1.cn.pool.ntp.org",
+        "0.asia.pool.ntp.org",
+        "1.asia.pool.ntp.org",
+        "ntp.aliyun.com",
+        "ntp1.aliyun.com",
+        "ntp.tencent.com",
+        "ntp1.tencent.com",
+        "ntp.ntsc.ac.cn",
+        "ntp1.nim.ac.cn",
+        "ntp2.nim.ac.cn",
         "time.cloudflare.com",
     ];
-
     const NTP_PORT: u16 = 123;
     const NTP_PACKET_SIZE: usize = 48;
     const NTP_UNIX_EPOCH_DIFF: u64 = 2_208_988_800;
     const RECV_TS_OFFSET: usize = 32;
     const TX_TS_OFFSET: usize = 40;
-
     #[derive(Copy, Clone, Debug)]
     struct NtpTimestamp {
         seconds: u32,
         fraction: u32,
     }
-
     impl NtpTimestamp {
         fn from_chrono_utc(time: DateTime<Utc>) -> Result<Self, SystemTimeError> {
             let systime: SystemTime = time.into();
@@ -245,29 +248,37 @@ mod ntp {
             bytes
         }
     }
-
     pub enum SyncMessage {
         Syncing(String),
         Success(chrono::Duration, chrono::Duration),
     }
-
-    pub fn query_ntp(server: &str, timeout: Duration, program_clock: &Arc<Mutex<ProgramClock>>) -> io::Result<(chrono::Duration, chrono::Duration)> {
+    pub fn query_ntp(
+        server: &str,
+        timeout: Duration,
+        program_clock: &Arc<Mutex<ProgramClock>>,
+    ) -> io::Result<(chrono::Duration, chrono::Duration)> {
         let addr = (server, NTP_PORT)
             .to_socket_addrs()?
             .next()
-            .ok_or_else(|| io::Error::new(ErrorKind::Other, format!("Cannot resolve NTP server: {}", server)))?;
-        
+            .ok_or_else(|| {
+                io::Error::new(
+                    ErrorKind::Other,
+                    format!("Cannot resolve NTP server: {}", server),
+                )
+            })?;
         let socket = UdpSocket::bind("0.0.0.0:0")?;
         socket.connect(addr)?;
         socket.set_read_timeout(Some(timeout))?;
         socket.set_write_timeout(Some(timeout))?;
         let mut req = [0u8; NTP_PACKET_SIZE];
         req[0] = 0b00_100_011;
-        let t1 = {
-            program_clock.lock().unwrap().now()
-        };
-        let t1_ntp = NtpTimestamp::from_chrono_utc(t1)
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Cannot convert program time: {}", e)))?;
+        let t1 = { program_clock.lock().unwrap().now() };
+        let t1_ntp = NtpTimestamp::from_chrono_utc(t1).map_err(|e| {
+            io::Error::new(
+                ErrorKind::Other,
+                format!("Cannot convert program time: {}", e),
+            )
+        })?;
         req[TX_TS_OFFSET..TX_TS_OFFSET + 8].copy_from_slice(&t1_ntp.to_bytes());
         let send_instant = Instant::now();
         socket.send(&req)?;
@@ -275,13 +286,23 @@ mod ntp {
         let n = socket.recv(&mut buf)?;
         let recv_instant = Instant::now();
         if n < NTP_PACKET_SIZE {
-            return Err(io::Error::new(ErrorKind::UnexpectedEof, "NTP response is too short"));
+            return Err(io::Error::new(
+                ErrorKind::UnexpectedEof,
+                "NTP response is too short",
+            ));
         }
         let round_trip_duration = recv_instant.duration_since(send_instant);
-        let t4 = t1 + chrono::Duration::from_std(round_trip_duration)
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Round trip duration error: {}", e)))?;
-        let t2_ntp = NtpTimestamp::from_bytes(buf[RECV_TS_OFFSET..RECV_TS_OFFSET + 8].try_into().unwrap());
-        let t3_ntp = NtpTimestamp::from_bytes(buf[TX_TS_OFFSET..TX_TS_OFFSET + 8].try_into().unwrap());
+        let t4 = t1
+            + chrono::Duration::from_std(round_trip_duration).map_err(|e| {
+                io::Error::new(
+                    ErrorKind::Other,
+                    format!("Round trip duration error: {}", e),
+                )
+            })?;
+        let t2_ntp =
+            NtpTimestamp::from_bytes(buf[RECV_TS_OFFSET..RECV_TS_OFFSET + 8].try_into().unwrap());
+        let t3_ntp =
+            NtpTimestamp::from_bytes(buf[TX_TS_OFFSET..TX_TS_OFFSET + 8].try_into().unwrap());
         let t2_systime = t2_ntp.to_system_time()?;
         let t3_systime = t3_ntp.to_system_time()?;
         let t2: DateTime<Utc> = t2_systime.into();
@@ -292,7 +313,7 @@ mod ntp {
     }
     fn perform_sync(
         server: &str,
-        program_clock: &Arc<Mutex<ProgramClock>>
+        program_clock: &Arc<Mutex<ProgramClock>>,
     ) -> io::Result<(chrono::Duration, chrono::Duration)> {
         query_ntp(server, Duration::from_millis(500), program_clock)
     }
@@ -355,16 +376,20 @@ fn handle_sync_message(
             )?;
         }
         ntp::SyncMessage::Success(measured_offset, measured_delay) => {
-            let measured_offset_secs = measured_offset.num_microseconds().unwrap_or(0) as f64 / 1_000_000.0;
-            let measurement_noise_r = (measured_delay.num_microseconds().unwrap_or(0) as f64 / 1_000_000.0) * delay_to_r_factor;
-            
-            let smoothed_offset_secs = kalman_filter.update(measured_offset_secs, measurement_noise_r);
-            
+            let measured_offset_secs =
+                measured_offset.num_microseconds().unwrap_or(0) as f64 / 1_000_000.0;
+            let measurement_noise_r = (measured_delay.num_microseconds().unwrap_or(0) as f64
+                / 1_000_000.0)
+                * delay_to_r_factor;
+            let smoothed_offset_secs =
+                kalman_filter.update(measured_offset_secs, measurement_noise_r);
             let smoothed_offset = if smoothed_offset_secs < 0.0 {
-                chrono::Duration::from_std(Duration::from_secs_f64(-smoothed_offset_secs)).map(|d| -d)
+                chrono::Duration::from_std(Duration::from_secs_f64(-smoothed_offset_secs))
+                    .map(|d| -d)
             } else {
                 chrono::Duration::from_std(Duration::from_secs_f64(smoothed_offset_secs))
-            }.unwrap_or(chrono::Duration::zero());
+            }
+            .unwrap_or(chrono::Duration::zero());
             clock.lock().unwrap().apply_offset(smoothed_offset);
             execute!(
                 io::stdout(),
@@ -372,7 +397,8 @@ fn handle_sync_message(
                 terminal::Clear(terminal::ClearType::CurrentLine)
             )?;
             print!(
-                "结果：测量偏移: {:.2}ms, 延迟: {}ms | 滤波后偏移: {:.2}ms, 漂移率: {:.2} ppm, 过程噪声: {:.1e}",
+                "结果：测量偏移: {:.2}ms, 延迟: {}ms | 滤波后偏移: {:.2}ms, 漂移率: {:.2} ppm, \
+                 过程噪声: {:.1e}",
                 measured_offset_secs * 1000.0,
                 measured_delay.num_milliseconds(),
                 smoothed_offset_secs * 1000.0,
@@ -402,7 +428,6 @@ fn run_ui_loop(
             cursor::MoveToColumn(0),
         )?;
         io::stdout().flush()?;
-
         if let Ok(message) = rx.try_recv() {
             handle_sync_message(message, &mut kalman_filter, &clock, delay_to_r_factor)?;
         }
