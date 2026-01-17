@@ -1,4 +1,4 @@
-use std::time::Instant;
+use quanta::Instant;
 
 use chrono::{DateTime, Utc};
 pub struct ProgramClock {

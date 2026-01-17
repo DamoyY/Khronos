@@ -5,9 +5,10 @@ edition = "2024"
 
 [dependencies]
 chrono = "*"
-rand = "*"
 crossterm = "*"
 ctrlc = "*"
+quanta = "*"
+rand = "*"
 
 [lints.clippy]
 all = "warn"

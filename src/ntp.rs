@@ -3,10 +3,11 @@ use std::{
     net::{ToSocketAddrs, UdpSocket},
     sync::{Arc, Mutex, mpsc},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{DateTime, Utc};
+use quanta::Instant;
 use rand::Rng;
 
 use crate::program_clock::ProgramClock;

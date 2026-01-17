@@ -1,4 +1,4 @@
-use std::time::Instant;
+use quanta::Instant;
 pub struct KalmanFilter {
     x_hat: [f64; 2],
     p_matrix: [[f64; 2]; 2],
