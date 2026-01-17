@@ -1,6 +1,10 @@
 use std::{
     io::{self, Write},
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -12,8 +16,17 @@ use rand::Rng;
 use crate::{config::AppConfig, kalman_filter::KalmanFilter, ntp, program_clock::ProgramClock};
 pub fn run(config: AppConfig) -> io::Result<()> {
     println!("按下 Ctrl+C 退出。");
+    let running = Arc::new(AtomicBool::new(true));
+    let running_flag = Arc::clone(&running);
+    ctrlc::set_handler(move || {
+        running_flag.store(false, Ordering::SeqCst);
+    })
+    .map_err(|e| io::Error::other(format!("无法设置 Ctrl+C 处理器: {e}")))?;
     let clock = Arc::new(Mutex::new(ProgramClock::new()));
-    initial_sync(&clock)?;
+    if !initial_sync(&clock, &running)? {
+        println!();
+        return Ok(());
+    }
     let mut kalman_filter = KalmanFilter::new(
         0.0,
         config.initial_uncertainty,
@@ -21,11 +34,22 @@ pub fn run(config: AppConfig) -> io::Result<()> {
         config.adaptive_q_enabled,
     );
     let rx = ntp::start_sync_thread(Arc::clone(&clock));
-    run_ui_loop(&clock, &mut kalman_filter, &rx, config.delay_to_r_factor)
+    let result = run_ui_loop(
+        &clock,
+        &mut kalman_filter,
+        &rx,
+        config.delay_to_r_factor,
+        &running,
+    );
+    println!();
+    result
 }
-fn initial_sync(clock: &Arc<Mutex<ProgramClock>>) -> io::Result<()> {
+fn initial_sync(clock: &Arc<Mutex<ProgramClock>>, running: &AtomicBool) -> io::Result<bool> {
     let mut rng = rand::rng();
     loop {
+        if !running.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
         let server_index = rng.random_range(0..ntp::NTP_SERVERS.len());
         let server = ntp::NTP_SERVERS[server_index];
         execute!(
@@ -38,11 +62,10 @@ fn initial_sync(clock: &Arc<Mutex<ProgramClock>>) -> io::Result<()> {
         if let Ok((initial_offset, _)) = ntp::query_ntp(server, Duration::from_millis(200), clock) {
             clock.lock().unwrap().apply_offset(initial_offset);
             println!();
-            break;
+            return Ok(true);
         }
         thread::sleep(Duration::from_secs(1));
     }
-    Ok(())
 }
 fn handle_sync_message(
     message: ntp::SyncMessage,
@@ -143,8 +166,9 @@ fn run_ui_loop(
     kalman_filter: &mut KalmanFilter,
     rx: &mpsc::Receiver<ntp::SyncMessage>,
     delay_to_r_factor: f64,
+    running: &AtomicBool,
 ) -> io::Result<()> {
-    loop {
+    while running.load(Ordering::SeqCst) {
         let corrected_utc = clock.lock().unwrap().now();
         let corrected_local: DateTime<Local> = corrected_utc.with_timezone(&Local);
         execute!(
@@ -162,4 +186,5 @@ fn run_ui_loop(
         }
         thread::sleep(Duration::from_millis(2));
     }
+    Ok(())
 }
