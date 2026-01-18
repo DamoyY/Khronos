@@ -9,6 +9,8 @@ crossterm = "*"
 ctrlc = "*"
 quanta = "*"
 rand = "*"
+serde = { version = "*", features = ["derive"] }
+serde_yaml = "*"
 
 [lints.clippy]
 all = "warn"

@@ -1,14 +1,13 @@
-use quanta::Instant;
-
 use chrono::{DateTime, Utc};
+use quanta::Instant;
 pub struct ProgramClock {
     current_utc: DateTime<Utc>,
     last_updated_at: Instant,
 }
 impl ProgramClock {
-    pub fn new() -> Self {
+    pub fn new(initial_utc: DateTime<Utc>) -> Self {
         Self {
-            current_utc: "2000-01-01T00:00:00Z".parse().unwrap(),
+            current_utc: initial_utc,
             last_updated_at: Instant::now(),
         }
     }

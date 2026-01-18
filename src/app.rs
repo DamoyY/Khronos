@@ -13,8 +13,13 @@ use chrono::{DateTime, Local};
 use crossterm::{cursor, execute, style::Print, terminal};
 use rand::Rng;
 
-use crate::{config::AppConfig, kalman_filter::KalmanFilter, ntp, program_clock::ProgramClock};
-pub fn run(config: AppConfig) -> io::Result<()> {
+use crate::{
+    config::{AppConfig, NtpConfig, UiConfig},
+    kalman_filter::KalmanFilter,
+    ntp,
+    program_clock::ProgramClock,
+};
+pub fn run(config: &AppConfig) -> io::Result<()> {
     println!("按下 Ctrl+C 退出。");
     let running = Arc::new(AtomicBool::new(true));
     let running_flag = Arc::clone(&running);
@@ -22,35 +27,43 @@ pub fn run(config: AppConfig) -> io::Result<()> {
         running_flag.store(false, Ordering::SeqCst);
     })
     .map_err(|e| io::Error::other(format!("无法设置 Ctrl+C 处理器: {e}")))?;
-    let clock = Arc::new(Mutex::new(ProgramClock::new()));
-    if !initial_sync(&clock, &running)? {
+    let initial_utc = config.clock.initial_utc()?;
+    let clock = Arc::new(Mutex::new(ProgramClock::new(initial_utc)));
+    if !initial_sync(&clock, &running, &config.ntp)? {
         println!();
         return Ok(());
     }
     let mut kalman_filter = KalmanFilter::new(
         0.0,
-        config.initial_uncertainty,
-        config.initial_process_noise_q,
+        config.kalman.initial_uncertainty,
+        config.kalman.initial_process_noise_q,
+        config.kalman.adaptation_rate_eta,
+        config.kalman.nis_ema_alpha,
     );
-    let rx = ntp::start_sync_thread(Arc::clone(&clock));
+    let rx = ntp::start_sync_thread(Arc::clone(&clock), config.ntp.clone());
     let result = run_ui_loop(
         &clock,
         &mut kalman_filter,
         &rx,
-        config.delay_to_r_factor,
+        &config.ui,
+        config.kalman.delay_to_r_factor,
         &running,
     );
     println!();
     result
 }
-fn initial_sync(clock: &Arc<Mutex<ProgramClock>>, running: &AtomicBool) -> io::Result<bool> {
+fn initial_sync(
+    clock: &Arc<Mutex<ProgramClock>>,
+    running: &AtomicBool,
+    ntp_config: &NtpConfig,
+) -> io::Result<bool> {
     let mut rng = rand::rng();
     loop {
         if !running.load(Ordering::SeqCst) {
             return Ok(false);
         }
-        let server_index = rng.random_range(0..ntp::NTP_SERVERS.len());
-        let server = ntp::NTP_SERVERS[server_index];
+        let server_index = rng.random_range(0..ntp_config.servers.len());
+        let server = &ntp_config.servers[server_index];
         execute!(
             io::stdout(),
             cursor::MoveToColumn(0),
@@ -58,12 +71,14 @@ fn initial_sync(clock: &Arc<Mutex<ProgramClock>>, running: &AtomicBool) -> io::R
             Print(format!("正在尝试从 {server} 进行初始同步..."))
         )?;
         io::stdout().flush()?;
-        if let Ok((initial_offset, _)) = ntp::query_ntp(server, Duration::from_millis(200), clock) {
+        if let Ok((initial_offset, _)) =
+            ntp::query_ntp(server, ntp_config.initial_sync_timeout(), clock, ntp_config)
+        {
             clock.lock().unwrap().apply_offset(initial_offset);
             println!();
             return Ok(true);
         }
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(ntp_config.initial_sync_retry_interval());
     }
 }
 fn handle_sync_message(
@@ -164,6 +179,7 @@ fn run_ui_loop(
     clock: &Arc<Mutex<ProgramClock>>,
     kalman_filter: &mut KalmanFilter,
     rx: &mpsc::Receiver<ntp::SyncMessage>,
+    ui_config: &UiConfig,
     delay_to_r_factor: f64,
     running: &AtomicBool,
 ) -> io::Result<()> {
@@ -175,7 +191,7 @@ fn run_ui_loop(
             cursor::MoveUp(1),
             cursor::MoveToColumn(0),
             terminal::Clear(terminal::ClearType::CurrentLine),
-            Print(corrected_local.format("%Y-%m-%d %H:%M:%S%.3f")),
+            Print(corrected_local.format(&ui_config.time_format)),
             cursor::MoveDown(1),
             cursor::MoveToColumn(0),
         )?;
@@ -183,7 +199,7 @@ fn run_ui_loop(
         if let Ok(message) = rx.try_recv() {
             handle_sync_message(message, kalman_filter, clock, delay_to_r_factor)?;
         }
-        thread::sleep(Duration::from_millis(2));
+        thread::sleep(ui_config.refresh_interval());
     }
     Ok(())
 }

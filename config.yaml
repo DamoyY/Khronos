@@ -1,0 +1,82 @@
+# 高精度软件时钟配置
+# 所有数值均为当前项目默认值，如需调整请在充分理解影响后修改。
+
+clock:
+  # 程序启动时使用的基准 UTC 时间（RFC3339 格式）。
+  # 在首次完成 NTP 同步前，时钟会以该时间为起点并按单调时钟推进。
+  initial_utc: "2000-01-01T00:00:00Z"
+
+ui:
+  # 界面刷新间隔（毫秒）。值越小，显示越流畅，但 CPU 占用越高。
+  refresh_interval_millis: 2
+  # 时间显示格式，使用 chrono 的 strftime 语法。
+  # 例如 %Y-%m-%d %H:%M:%S%.3f 表示带毫秒的本地时间。
+  time_format: "%Y-%m-%d %H:%M:%S%.3f"
+
+kalman:
+  # 初始测量偏移的不确定度（秒^2）。该值越大，滤波器越保守。
+  initial_uncertainty: 10.0
+  # 初始过程噪声 Q，决定漂移变化的敏感度。
+  # 数值越大越容易跟随漂移变化，但也可能引入更多抖动。
+  initial_process_noise_q: 5e-10
+  # 将 NTP 往返延迟转换为测量噪声 R 的系数。
+  # 值越大表示越不信任高延迟样本。
+  delay_to_r_factor: 1.0
+  # 自适应过程噪声的调整速度（ETA），范围建议 0~1。
+  # 数值越大调整越快，但稳定性可能降低。
+  adaptation_rate_eta: 0.05
+  # NIS 指标的指数滑动平均系数（Alpha），范围建议 0~1。
+  # 数值越大对最新测量越敏感。
+  nis_ema_alpha: 0.05
+
+ntp:
+  # NTP 服务器列表，按需调整可提升可用性。
+  servers:
+    - "0.cn.pool.ntp.org"
+    - "1.cn.pool.ntp.org"
+    - "0.asia.pool.ntp.org"
+    - "1.asia.pool.ntp.org"
+    - "ntp.aliyun.com"
+    - "ntp1.aliyun.com"
+    - "ntp.tencent.com"
+    - "ntp1.tencent.com"
+    - "ntp.ntsc.ac.cn"
+    - "ntp1.nim.ac.cn"
+    - "ntp2.nim.ac.cn"
+    - "time.cloudflare.com"
+    - "time.google.com"
+    - "time1.google.com"
+    - "time2.google.com"
+    - "time3.google.com"
+    - "time4.google.com"
+    - "time.apple.com"
+    - "time.asia.apple.com"
+    - "time.windows.com"
+    - "ntp.tuna.tsinghua.edu.cn"
+    - "ntp.sjtu.edu.cn"
+    - "ntp.myhuaweicloud.com"
+    - "time.nist.gov"
+    - "time-a.nist.gov"
+    - "pool.ntp.org"
+  # NTP 服务端口。标准端口为 123。
+  port: 123
+  # NTP 数据包大小（字节）。标准 NTP v3/v4 请求为 48 字节。
+  # 修改此值可能导致请求无法被服务器接受。
+  packet_size: 48
+  # NTP 纪元与 Unix 纪元的秒差（1900-01-01 到 1970-01-01）。
+  # 该值通常固定，不建议修改。
+  unix_epoch_diff_seconds: 2208988800
+  # NTP 接收时间戳（t2）在数据包中的字节偏移。
+  recv_timestamp_offset: 32
+  # NTP 发送时间戳（t3）在数据包中的字节偏移。
+  transmit_timestamp_offset: 40
+  # 初始同步请求的超时（毫秒）。
+  initial_sync_timeout_millis: 200
+  # 初始同步失败后的重试间隔（秒）。
+  initial_sync_retry_interval_secs: 1
+  # 后续周期同步请求的超时（毫秒）。
+  sync_timeout_millis: 500
+  # 周期同步的随机间隔最小值（秒）。
+  sync_interval_min_secs: 0
+  # 周期同步的随机间隔最大值（秒）。该值与最小值组成闭区间。
+  sync_interval_max_secs: 2
