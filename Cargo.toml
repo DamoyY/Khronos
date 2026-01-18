@@ -10,7 +10,7 @@ ctrlc = "*"
 quanta = "*"
 rand = "*"
 serde = { version = "*", features = ["derive"] }
-serde_yaml = "*"
+serde_yaml = { package = "serde_yaml_ng", version = "*" }
 
 [lints.clippy]
 all = "warn"

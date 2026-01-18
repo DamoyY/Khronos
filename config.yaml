@@ -79,4 +79,4 @@ ntp:
   # 周期同步的随机间隔最小值（秒）。
   sync_interval_min_secs: 0
   # 周期同步的随机间隔最大值（秒）。该值与最小值组成闭区间。
-  sync_interval_max_secs: 2
+  sync_interval_max_secs: 3
